@@ -1,6 +1,7 @@
 package com.healthapp.nutrition.mapper;
 
 import com.healthapp.nutrition.dto.request.LogMealRequest;
+import com.healthapp.nutrition.dto.response.BarcodeProductResponse;
 import com.healthapp.nutrition.dto.response.DailySummaryResponse;
 import com.healthapp.nutrition.dto.response.MealLogResponse;
 import com.healthapp.nutrition.entity.DailyLogEntity;
@@ -80,6 +81,55 @@ public class NutritionMapper {
                 entity.getTotalCaloriesBurned(),
                 entity.getNetCalories()
         );
+    }
+
+    public BarcodeProductResponse toBarcodeResponse(FoodItemEntity entity, String dataSource, boolean cached) {
+        String name = entity.getNameTh() != null && !entity.getNameTh().isBlank() ? entity.getNameTh() : entity.getNameEn();
+        return BarcodeProductResponse.builder()
+                .barcode(entity.getBarcode())
+                .productName(name)
+                .brand(entity.getBrand())
+                .servingSize(entity.getServingSizeGrams() + "g")
+                .calories(entity.getCalories())
+                .proteinG(entity.getProteinG())
+                .carbsG(entity.getCarbsG())
+                .fatG(entity.getFatG())
+                .sodiumMg(entity.getSodiumMg())
+                .sugarG(entity.getSugarG())
+                .fiberG(entity.getFiberG())
+                .imageUrl(entity.getImageUrl())
+                .dataSource(dataSource)
+                .cached(cached)
+                .build();
+    }
+
+    public FoodItemEntity toFoodItemEntity(BarcodeProductResponse response) {
+        double servingGrams = 100.0;
+        if (response.getServingSize() != null) {
+            String digits = response.getServingSize().replaceAll("[^0-9.]", "");
+            if (!digits.isBlank()) {
+                try {
+                    servingGrams = Double.parseDouble(digits);
+                } catch (NumberFormatException ignored) {}
+            }
+        }
+
+        return FoodItemEntity.builder()
+                .barcode(response.getBarcode())
+                .nameTh(response.getProductName())
+                .nameEn(response.getProductName())
+                .brand(response.getBrand())
+                .servingSizeGrams(servingGrams)
+                .calories(response.getCalories() != null ? response.getCalories() : 0)
+                .proteinG(response.getProteinG() != null ? response.getProteinG() : 0.0)
+                .carbsG(response.getCarbsG() != null ? response.getCarbsG() : 0.0)
+                .fatG(response.getFatG() != null ? response.getFatG() : 0.0)
+                .sodiumMg(response.getSodiumMg() != null ? response.getSodiumMg() : 0.0)
+                .sugarG(response.getSugarG() != null ? response.getSugarG() : 0.0)
+                .fiberG(response.getFiberG() != null ? response.getFiberG() : 0.0)
+                .imageUrl(response.getImageUrl())
+                .source("OPEN_FOOD_FACTS")
+                .build();
     }
 
     public Map<String, Object> toBarcodeMap(FoodItemEntity entity) {

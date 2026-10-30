@@ -1,10 +1,10 @@
 package com.healthapp.nutrition.service;
 
 import com.healthapp.nutrition.dto.request.LogMealRequest;
+import com.healthapp.nutrition.dto.response.BarcodeProductResponse;
 import com.healthapp.nutrition.dto.response.DailySummaryResponse;
 import com.healthapp.nutrition.dto.response.MealLogResponse;
 import java.time.LocalDate;
-import java.util.Map;
 import java.util.UUID;
 
 public interface NutritionService {
@@ -13,6 +13,5 @@ public interface NutritionService {
 
     DailySummaryResponse getDailySummary(UUID userId, LocalDate date);
 
-    Map<String, Object> lookupBarcode(String barcode);
+    BarcodeProductResponse lookupBarcode(String barcode);
 }
-

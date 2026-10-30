@@ -1,10 +1,12 @@
 package com.healthapp.nutrition.controller;
 
 import com.healthapp.nutrition.dto.request.LogMealRequest;
+import com.healthapp.nutrition.dto.response.BarcodeProductResponse;
 import com.healthapp.nutrition.dto.response.DailySummaryResponse;
 import com.healthapp.nutrition.dto.response.MealLogResponse;
 import com.healthapp.nutrition.service.NutritionService;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -50,9 +52,14 @@ public class NutritionController {
     }
 
     @GetMapping("/barcode/{code}")
-    @Operation(summary = "ค้นหาข้อมูลโภชนาการจากรหัสบาร์โค้ดสินค้า (เช่น 8850188800012)")
-    public Map<String, Object> getBarcode(@PathVariable String code) {
+    @Operation(
+            summary = "ค้นหาข้อมูลโภชนาการจากรหัสบาร์โค้ดสินค้า (3-Tier Cache: Redis -> PostgreSQL -> Open Food Facts)",
+            description = "ค้นหาข้อมูลโภชนาการสินค้าจากบาร์โค้ด (เช่น 8850188800012 มาม่า หรือ 5449000000996 โค้ก) ฟรี 100% ตอบสนองเร็วระดับมิลลิวินาทีผ่าน Redis Cache"
+    )
+    public BarcodeProductResponse getBarcode(
+            @Parameter(description = "รหัสบาร์โค้ดสินค้า เช่น 8850188800012 (มาม่า) หรือ 5449000000996 (โค้ก)", example = "8850188800012")
+            @PathVariable String code
+    ) {
         return nutritionService.lookupBarcode(code);
     }
 }
-
