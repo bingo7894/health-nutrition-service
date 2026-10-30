@@ -3,11 +3,11 @@ package com.healthapp.nutrition.service.impl;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.healthapp.nutrition.client.OpenFoodFactsClient;
 import com.healthapp.nutrition.dto.request.LogMealRequest;
-import com.healthapp.nutrition.dto.response.BarcodeProductResponse;
-import com.healthapp.nutrition.dto.response.DailySummaryResponse;
-import com.healthapp.nutrition.dto.response.MealLogResponse;
+import com.healthapp.nutrition.dto.request.UpdateMealRequest;
+import com.healthapp.nutrition.dto.response.*;
 import com.healthapp.nutrition.entity.DailyLogEntity;
 import com.healthapp.nutrition.entity.FoodItemEntity;
+import com.healthapp.nutrition.entity.MealItemEntity;
 import com.healthapp.nutrition.mapper.NutritionMapper;
 import com.healthapp.nutrition.repository.DailyLogRepository;
 import com.healthapp.nutrition.repository.FoodItemRepository;
@@ -22,6 +22,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -45,26 +46,78 @@ public class NutritionServiceImpl implements NutritionService {
 
     @Override
     public MealLogResponse logMeal(LogMealRequest request) {
-        LocalDate today = LocalDate.now();
+        LocalDate targetDate = (request.logDate() != null) ? request.logDate() : LocalDate.now();
 
-        // 1. Get or create daily log
-        DailyLogEntity dailyLog = dailyLogRepository.findByUserIdAndLogDate(request.userId(), today)
-                .orElseGet(() -> dailyLogRepository.save(nutritionMapper.createNewDailyLog(request.userId(), today)));
+        // 1. Get or create daily log for target date
+        DailyLogEntity dailyLog = dailyLogRepository.findByUserIdAndLogDate(request.userId(), targetDate)
+                .orElseGet(() -> dailyLogRepository.save(nutritionMapper.createNewDailyLog(request.userId(), targetDate)));
 
-        // 2. Accumulate nutrients into daily log
-        dailyLog.setTotalCaloriesIn(dailyLog.getTotalCaloriesIn() + request.calories());
-        dailyLog.setTotalProteinG(dailyLog.getTotalProteinG() + request.proteinG());
-        dailyLog.setTotalCarbsG(dailyLog.getTotalCarbsG() + request.carbsG());
-        dailyLog.setTotalFatG(dailyLog.getTotalFatG() + request.fatG());
-        dailyLog.setTotalSodiumMg(dailyLog.getTotalSodiumMg() + request.sodiumMg());
-        dailyLog.setNetCalories(dailyLog.getTotalCaloriesIn() - dailyLog.getTotalCaloriesBurned());
-        dailyLogRepository.save(dailyLog);
+        // 2. Save meal item
+        MealItemEntity mealEntity = nutritionMapper.toMealEntity(request, dailyLog);
+        MealItemEntity savedMeal = mealItemRepository.save(mealEntity);
 
-        // 3. Save meal item
-        var mealEntity = nutritionMapper.toMealEntity(request, dailyLog);
-        var savedMeal = mealItemRepository.save(mealEntity);
+        // 3. Atomically recalculate daily totals from all meals in that day
+        recalculateDailyLog(dailyLog);
 
+        log.info("Logged meal '{}' ({}) for user {} on date {}", savedMeal.getFoodName(), savedMeal.getMealType(), request.userId(), targetDate);
         return nutritionMapper.toMealResponse(savedMeal, request.userId());
+    }
+
+    @Override
+    public MealLogResponse updateMeal(UUID mealId, UpdateMealRequest request) {
+        MealItemEntity meal = mealItemRepository.findById(mealId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Meal item with id " + mealId + " not found"));
+
+        meal.setMealType(request.mealType());
+        meal.setFoodName(request.foodName());
+        meal.setPortionWeightGrams(request.portionWeightGrams());
+        meal.setCookingMethod(request.cookingMethod() != null ? request.cookingMethod() : "BOILED");
+        meal.setCalories(request.calories());
+        meal.setProteinG(request.proteinG());
+        meal.setCarbsG(request.carbsG());
+        meal.setFatG(request.fatG());
+        meal.setSodiumMg(request.sodiumMg());
+        meal.setSugarG(request.sugarG());
+        meal.setFiberG(request.fiberG());
+        if (request.imageUrl() != null) {
+            meal.setImageUrl(request.imageUrl());
+        }
+
+        MealItemEntity updatedMeal = mealItemRepository.save(meal);
+
+        // Recalculate daily totals
+        DailyLogEntity dailyLog = updatedMeal.getDailyLog();
+        recalculateDailyLog(dailyLog);
+
+        log.info("Updated meal '{}' (id: {}). Recalculated daily log totals.", updatedMeal.getFoodName(), mealId);
+        return nutritionMapper.toMealResponse(updatedMeal, dailyLog.getUserId());
+    }
+
+    @Override
+    public void deleteMeal(UUID mealId) {
+        MealItemEntity meal = mealItemRepository.findById(mealId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Meal item with id " + mealId + " not found"));
+
+        DailyLogEntity dailyLog = meal.getDailyLog();
+        mealItemRepository.delete(meal);
+        mealItemRepository.flush();
+
+        // Recalculate daily totals after deletion
+        recalculateDailyLog(dailyLog);
+        log.info("Deleted meal item {} and recalculated daily log {}", mealId, dailyLog.getId());
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public DailyDetailResponse getDailyDetail(UUID userId, LocalDate date) {
+        DailyLogEntity dailyLog = dailyLogRepository.findByUserIdAndLogDate(userId, date)
+                .orElseGet(() -> nutritionMapper.createNewDailyLog(userId, date));
+
+        List<MealItemEntity> meals = (dailyLog.getId() != null)
+                ? mealItemRepository.findByDailyLogIdOrderByLoggedAtAsc(dailyLog.getId())
+                : List.of();
+
+        return nutritionMapper.toDailyDetailResponse(dailyLog, meals, userId);
     }
 
     @Override
@@ -73,6 +126,22 @@ public class NutritionServiceImpl implements NutritionService {
         DailyLogEntity dailyLog = dailyLogRepository.findByUserIdAndLogDate(userId, date)
                 .orElseGet(() -> nutritionMapper.createNewDailyLog(userId, date));
         return nutritionMapper.toDailySummaryResponse(dailyLog);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public HistoricalSummaryResponse getRangeSummary(UUID userId, LocalDate startDate, LocalDate endDate) {
+        List<DailyLogEntity> logs = dailyLogRepository.findByUserIdAndLogDateBetweenOrderByLogDateAsc(userId, startDate, endDate);
+        return nutritionMapper.toHistoricalSummaryResponse(userId, startDate, endDate, logs);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public HistoricalSummaryResponse getMonthlySummary(UUID userId, int year, int month) {
+        LocalDate startDate = LocalDate.of(year, month, 1);
+        LocalDate endDate = startDate.withDayOfMonth(startDate.lengthOfMonth());
+        List<DailyLogEntity> logs = dailyLogRepository.findByUserIdAndLogDateBetweenOrderByLogDateAsc(userId, startDate, endDate);
+        return nutritionMapper.toHistoricalSummaryResponse(userId, startDate, endDate, logs);
     }
 
     @Override
@@ -105,7 +174,6 @@ public class NutritionServiceImpl implements NutritionService {
             BarcodeProductResponse response = nutritionMapper.toBarcodeResponse(entity, "LOCAL_DATABASE", false);
             log.info("Barcode {} hit in Tier 2: LOCAL_DATABASE ({})", barcode, entity.getNameTh());
 
-            // Save to Redis Cache for future fast lookups
             cacheInRedis(cacheKey, response);
             return response;
         }
@@ -116,7 +184,6 @@ public class NutritionServiceImpl implements NutritionService {
         if (offProduct.isPresent()) {
             BarcodeProductResponse response = offProduct.get();
 
-            // Persist to PostgreSQL food_items
             try {
                 FoodItemEntity entity = nutritionMapper.toFoodItemEntity(response);
                 foodItemRepository.save(entity);
@@ -125,17 +192,39 @@ public class NutritionServiceImpl implements NutritionService {
                 log.warn("Failed to persist barcode {} to DB: {}", barcode, e.getMessage());
             }
 
-            // Cache in Redis for 7 days
             cacheInRedis(cacheKey, response);
             return response;
         }
 
-        // Product not found in any tier
         log.info("Barcode {} not found in Open Food Facts or local database", barcode);
         throw new ResponseStatusException(
                 HttpStatus.NOT_FOUND,
                 "Product with barcode '" + barcode + "' not found. You can scan or photograph your meal using AI Vision scan."
         );
+    }
+
+    private void recalculateDailyLog(DailyLogEntity dailyLog) {
+        List<MealItemEntity> remainingMeals = mealItemRepository.findByDailyLogId(dailyLog.getId());
+
+        int totalCalories = remainingMeals.stream().mapToInt(MealItemEntity::getCalories).sum();
+        double totalProtein = remainingMeals.stream().mapToDouble(MealItemEntity::getProteinG).sum();
+        double totalCarbs = remainingMeals.stream().mapToDouble(MealItemEntity::getCarbsG).sum();
+        double totalFat = remainingMeals.stream().mapToDouble(MealItemEntity::getFatG).sum();
+        double totalSodium = remainingMeals.stream().mapToDouble(MealItemEntity::getSodiumMg).sum();
+        double totalSugar = remainingMeals.stream().mapToDouble(MealItemEntity::getSugarG).sum();
+        double totalFiber = remainingMeals.stream().mapToDouble(MealItemEntity::getFiberG).sum();
+
+        dailyLog.setTotalCaloriesIn(totalCalories);
+        dailyLog.setTotalProteinG(Math.round(totalProtein * 10.0) / 10.0);
+        dailyLog.setTotalCarbsG(Math.round(totalCarbs * 10.0) / 10.0);
+        dailyLog.setTotalFatG(Math.round(totalFat * 10.0) / 10.0);
+        dailyLog.setTotalSodiumMg(Math.round(totalSodium * 10.0) / 10.0);
+        dailyLog.setTotalSugarG(Math.round(totalSugar * 10.0) / 10.0);
+        dailyLog.setTotalFiberG(Math.round(totalFiber * 10.0) / 10.0);
+        dailyLog.setNetCalories(totalCalories - dailyLog.getTotalCaloriesBurned());
+
+        dailyLogRepository.save(dailyLog);
+        log.info("Recalculated daily log {} (date: {}): totalCalories={}", dailyLog.getId(), dailyLog.getLogDate(), totalCalories);
     }
 
     private void cacheInRedis(String key, BarcodeProductResponse response) {

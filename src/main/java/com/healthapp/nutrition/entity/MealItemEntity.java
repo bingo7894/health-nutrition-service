@@ -49,6 +49,14 @@ public class MealItemEntity {
     @Column(name = "sodium_mg")
     private double sodiumMg;
 
+    @Column(name = "sugar_g")
+    @Builder.Default
+    private double sugarG = 0.0;
+
+    @Column(name = "fiber_g")
+    @Builder.Default
+    private double fiberG = 0.0;
+
     @Column(name = "image_url")
     private String imageUrl;
 

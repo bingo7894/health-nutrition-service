@@ -8,6 +8,8 @@ import java.util.UUID;
 
 @Repository
 public interface MealItemRepository extends JpaRepository<MealItemEntity, UUID> {
-    List<MealItemEntity> findByDailyLogId(UUID dailyLogId);
-}
 
+    List<MealItemEntity> findByDailyLogId(UUID dailyLogId);
+
+    List<MealItemEntity> findByDailyLogIdOrderByLoggedAtAsc(UUID dailyLogId);
+}

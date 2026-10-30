@@ -1,17 +1,15 @@
 package com.healthapp.nutrition.mapper;
 
 import com.healthapp.nutrition.dto.request.LogMealRequest;
-import com.healthapp.nutrition.dto.response.BarcodeProductResponse;
-import com.healthapp.nutrition.dto.response.DailySummaryResponse;
-import com.healthapp.nutrition.dto.response.MealLogResponse;
+import com.healthapp.nutrition.dto.response.*;
 import com.healthapp.nutrition.entity.DailyLogEntity;
 import com.healthapp.nutrition.entity.FoodItemEntity;
 import com.healthapp.nutrition.entity.MealItemEntity;
 import org.springframework.stereotype.Component;
+
 import java.time.LocalDate;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.UUID;
+import java.util.*;
+import java.util.stream.Collectors;
 
 @Component
 public class NutritionMapper {
@@ -28,6 +26,8 @@ public class NutritionMapper {
                 .carbsG(request.carbsG())
                 .fatG(request.fatG())
                 .sodiumMg(request.sodiumMg())
+                .sugarG(request.sugarG())
+                .fiberG(request.fiberG())
                 .imageUrl(request.imageUrl())
                 .build();
     }
@@ -45,6 +45,8 @@ public class NutritionMapper {
                 entity.getCarbsG(),
                 entity.getFatG(),
                 entity.getSodiumMg(),
+                entity.getSugarG(),
+                entity.getFiberG(),
                 entity.getImageUrl(),
                 entity.getLoggedAt()
         );
@@ -80,6 +82,114 @@ public class NutritionMapper {
                 entity.getTotalFiberG(),
                 entity.getTotalCaloriesBurned(),
                 entity.getNetCalories()
+        );
+    }
+
+    public MacroDistribution calculateMacroDistribution(double proteinG, double carbsG, double fatG) {
+        double proteinCalories = proteinG * 4.0;
+        double carbsCalories = carbsG * 4.0;
+        double fatCalories = fatG * 9.0;
+        double totalMacroCalories = proteinCalories + carbsCalories + fatCalories;
+
+        if (totalMacroCalories <= 0.0) {
+            return new MacroDistribution(0.0, 0.0, 0.0);
+        }
+
+        double proteinPct = Math.round((proteinCalories / totalMacroCalories) * 1000.0) / 10.0;
+        double carbsPct = Math.round((carbsCalories / totalMacroCalories) * 1000.0) / 10.0;
+        double fatPct = Math.round((fatCalories / totalMacroCalories) * 1000.0) / 10.0;
+
+        return new MacroDistribution(proteinPct, carbsPct, fatPct);
+    }
+
+    public DailyDetailResponse toDailyDetailResponse(DailyLogEntity dailyLog, List<MealItemEntity> mealEntities, UUID userId) {
+        List<MealLogResponse> mealResponses = mealEntities.stream()
+                .map(m -> toMealResponse(m, userId))
+                .toList();
+
+        Map<String, List<MealLogResponse>> mealsByMealType = mealResponses.stream()
+                .collect(Collectors.groupingBy(
+                        MealLogResponse::mealType,
+                        LinkedHashMap::new,
+                        Collectors.toList()
+                ));
+
+        MacroDistribution macroDistribution = calculateMacroDistribution(
+                dailyLog.getTotalProteinG(),
+                dailyLog.getTotalCarbsG(),
+                dailyLog.getTotalFatG()
+        );
+
+        return new DailyDetailResponse(
+                dailyLog.getId(),
+                dailyLog.getUserId(),
+                dailyLog.getLogDate(),
+                dailyLog.getTotalCaloriesIn(),
+                dailyLog.getTotalProteinG(),
+                dailyLog.getTotalCarbsG(),
+                dailyLog.getTotalFatG(),
+                dailyLog.getTotalSodiumMg(),
+                dailyLog.getTotalSugarG(),
+                dailyLog.getTotalFiberG(),
+                dailyLog.getTotalCaloriesBurned(),
+                dailyLog.getNetCalories(),
+                macroDistribution,
+                mealsByMealType,
+                mealResponses.size()
+        );
+    }
+
+    public HistoricalSummaryResponse toHistoricalSummaryResponse(UUID userId, LocalDate startDate, LocalDate endDate, List<DailyLogEntity> logs) {
+        if (logs.isEmpty()) {
+            return new HistoricalSummaryResponse(
+                    userId,
+                    startDate,
+                    endDate,
+                    0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    null,
+                    0,
+                    null,
+                    0,
+                    List.of()
+            );
+        }
+
+        int totalDays = logs.size();
+        double sumCalories = logs.stream().mapToInt(DailyLogEntity::getTotalCaloriesIn).sum();
+        double sumProtein = logs.stream().mapToDouble(DailyLogEntity::getTotalProteinG).sum();
+        double sumCarbs = logs.stream().mapToDouble(DailyLogEntity::getTotalCarbsG).sum();
+        double sumFat = logs.stream().mapToDouble(DailyLogEntity::getTotalFatG).sum();
+
+        DailyLogEntity maxCalLog = logs.stream()
+                .max(Comparator.comparingInt(DailyLogEntity::getTotalCaloriesIn))
+                .orElse(logs.get(0));
+
+        DailyLogEntity minCalLog = logs.stream()
+                .min(Comparator.comparingInt(DailyLogEntity::getTotalCaloriesIn))
+                .orElse(logs.get(0));
+
+        List<DailySummaryResponse> dailyResponses = logs.stream()
+                .map(this::toDailySummaryResponse)
+                .toList();
+
+        return new HistoricalSummaryResponse(
+                userId,
+                startDate,
+                endDate,
+                totalDays,
+                Math.round((sumCalories / totalDays) * 10.0) / 10.0,
+                Math.round((sumProtein / totalDays) * 10.0) / 10.0,
+                Math.round((sumCarbs / totalDays) * 10.0) / 10.0,
+                Math.round((sumFat / totalDays) * 10.0) / 10.0,
+                maxCalLog.getLogDate(),
+                maxCalLog.getTotalCaloriesIn(),
+                minCalLog.getLogDate(),
+                minCalLog.getTotalCaloriesIn(),
+                dailyResponses
         );
     }
 
@@ -151,4 +261,3 @@ public class NutritionMapper {
         return result;
     }
 }
-
